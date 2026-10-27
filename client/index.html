@@ -6,29 +6,93 @@
             name="viewport"
             content="width=device-width, initial-scale=1.0"
         >
+        <meta
+            name="description"
+            content="Realtime WebSocket chat"
+        >
         <title>WebSocket Chat</title>
-        <link rel="stylesheet" href="styles.css">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+        <link
+            rel="stylesheet"
+            href="styles.css"
+        >
+        <script
+            src="client.js"
+            defer
+        ></script>
     </head>
     <body>
-        <div class="chat-container">
+        <div
+            id="error-banner"
+            class="error-banner"
+            role="alert"
+        ></div>
+
+        <main class="chat-container">
+            <header class="chat-header">
+                <h1>WebSocket Chat</h1>
+                <div class="header-right">
+                    <div
+                        class="status"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <span
+                            id="status-dot"
+                            class="status-dot"
+                            aria-hidden="true"
+                        ></span>
+                        <span id="status-label">Connecting…</span>
+                    </div>
+                    <button
+                        id="theme-toggle"
+                        aria-label="Toggle dark mode"
+                        title="Toggle theme"
+                    >🌙</button>
+                </div>
+            </header>
+
             <div
                 class="chat-box"
                 id="chat-box"
+                role="log"
+                aria-live="polite"
+                aria-label="Chat messages"
             >
-                <!-- Tin nhắn sẽ được hiển thị ở đây -->
+                <!-- Messages appear here -->
             </div>
-            <div class="input-container">
+
+            <form
+                class="input-container"
+                id="input-form"
+            >
+                <label
+                    class="sr-only"
+                    for="message-input"
+                >Message</label>
                 <input
                     type="text"
                     id="message-input"
-                    placeholder="Nhập tin nhắn..."
+                    placeholder="Type a message…"
+                    autocomplete="off"
+                    maxlength="500"
                 >
-                <button id="send-button">
-                    <i class="fa-regular fa-paper-plane"></i>
+                <button
+                    id="send-button"
+                    type="submit"
+                    aria-label="Send message"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        aria-hidden="true"
+                    >
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
                 </button>
-            </div>
-        </div>
-        <script src="client.js"></script>
+            </form>
+        </main>
     </body>
-</html> 
+</html>

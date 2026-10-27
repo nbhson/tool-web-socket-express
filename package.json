@@ -1,16 +1,26 @@
 {
-  "name": "server",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "tool-web-socket-express",
+  "version": "2.0.0",
+  "description": "Realtime chat via WebSockets, served by Express 5 — a standalone variant of tool-web-socket",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
   },
-  "keywords": [],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "websocket",
+    "chat",
+    "express",
+    "realtime"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "express": "^4.21.2",
-    "ws": "^8.18.0"
+    "express": "^5.0.0",
+    "ws": "^8.0.0"
   }
 }

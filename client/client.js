@@ -1,109 +1,221 @@
+/**
+ * Chat client: WebSocket connection with auto-reconnect, connection status UI,
+ * notifications, and dark mode support.
+ */
+
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────────
 let socket = null;
 let uId = null;
 let input = null;
+let chatBox = null;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let myIp = '';
 
-document.addEventListener("DOMContentLoaded", async function () {
-    const ip = await getIp();
-    input = document.getElementById('message-input');
-    generateUUID();
-    wsConnection(ip, uId);
-    wsListenMessage();
-    addMessageEvents(ip, uId);
-    requestNotification();
+const MAX_RECONNECT_DELAY = 10_000;
+const BASE_RECONNECT_DELAY = 1_000;
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  input = document.getElementById('message-input');
+  chatBox = document.getElementById('chat-box');
+  uId = generateUUID();
+  myIp = await getIp() ?? 'unknown';
+  bindSendEvents();
+  bindThemeToggle();
+  connect();
+  requestNotification();
 });
 
-async function getIp() {
+// ── Network ────────────────────────────────────────────────────────────────────
+
+/** Derive the WS URL from the current page location (works on localhost and LAN). */
+function wsUrl() {
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${window.location.host}/ws`;
+}
+
+/** Open a WebSocket connection with automatic reconnection. */
+function connect() {
+  clearTimeout(reconnectTimer);
+  setStatus('connecting');
+  socket = new WebSocket(wsUrl());
+
+  socket.addEventListener('open', () => {
+    reconnectAttempts = 0;
+    setStatus('connected');
+    wsSend({ ip: myIp, message: `New User Join: ${myIp} - ${uId}` });
+  });
+
+  socket.addEventListener('message', (event) => {
     try {
-        const response = await fetch("https://api.ipify.org?format=json");
-        const data = await response.json();
-        const ip = data.ip;
-        return ip;
-    } catch (error) {
-        console.error(error);
+      const data = JSON.parse(event.data);
+      if (data.error) { showError(data.error); return; }
+      displayMessage(data.message ?? '', data.ip ?? '', data.uId ?? '');
+      showNotification(data.message ?? '');
+    } catch (err) {
+      console.error('Failed to parse message:', err);
     }
+  });
+
+  socket.addEventListener('close', () => {
+    setStatus('disconnected');
+    scheduleReconnect();
+  });
+
+  socket.addEventListener('error', (err) => {
+    console.error('WebSocket error:', err);
+    setStatus('disconnected');
+  });
 }
 
-function addMessageEvents(ip = '', uId = '') {
-    document.getElementById('send-button').addEventListener('click', function () {
-        const message = input.value;
-        wsSend(message, ip, uId);
-    });
-    document.getElementById('message-input').addEventListener('keydown', function (event) {
-        if (event.key === 'Enter') {
-            const message = input.value;
-            wsSend(message, ip, uId);
-        }
-    });
+/** Reconnect with exponential backoff (capped). */
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  const delay = Math.min(BASE_RECONNECT_DELAY * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY);
+  reconnectAttempts += 1;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
 }
 
+/**
+ * Send a message over the socket (no-op when disconnected).
+ * @param {{ ip?: string, message?: string, uId?: string }} payload
+ */
+function wsSend({ ip = myIp, message = '', uId: id = uId } = {}) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ ip, message, uId: id }));
+  } else {
+    showError('Not connected — message not sent.');
+  }
+}
+
+// ── UI helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Update the connection status indicator.
+ * @param {'connected'|'connecting'|'disconnected'} state
+ */
+function setStatus(state) {
+  const dot = document.getElementById('status-dot');
+  const label = document.getElementById('status-label');
+  if (!dot || !label) return;
+  dot.className = `status-dot ${state}`;
+  label.textContent = state === 'connected' ? 'Connected'
+    : state === 'connecting' ? 'Connecting…' : 'Disconnected';
+}
+
+/**
+ * Show a transient error banner.
+ * @param {string} text
+ */
+function showError(text) {
+  const banner = document.getElementById('error-banner');
+  if (!banner) return;
+  banner.textContent = text;
+  banner.classList.add('visible');
+  setTimeout(() => banner.classList.remove('visible'), 4000);
+}
+
+/**
+ * Append a message bubble to the chat box.
+ * @param {string} message
+ * @param {string} ip
+ * @param {string} wsuId
+ */
 function displayMessage(message = '', ip = '', wsuId = '') {
-    const chatBox = document.getElementById('chat-box');
-    const messageElement = document.createElement('div');
+  if (!message) return;
+  const el = document.createElement('div');
+  el.className = ip && uId === wsuId ? 'my-message' : 'other-message';
+  el.textContent = message;
+  chatBox.appendChild(el);
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
 
+// ── Events ─────────────────────────────────────────────────────────────────────
+
+function bindSendEvents() {
+  const send = () => {
+    const message = input.value.trim();
+    if (!message) return;
+    wsSend({ message });
     input.value = '';
-    messageElement.className = ip && (uId === wsuId) ? 'my-message' : 'other-message';
-    messageElement.textContent = message;
-    
-    chatBox.appendChild(messageElement);
-    chatBox.scrollTop = chatBox.scrollHeight;
+    input.focus();
+  };
+  document.getElementById('input-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    send();
+  });
+
+  const themeToggle = document.getElementById('theme-toggle');
+  themeToggle.addEventListener('click', toggleTheme);
 }
 
-function wsConnection(ip, uid) {
-    socket = new WebSocket('ws://localhost:8080');
-    socket.addEventListener("open", (event) => {
-        socket.send(JSON.stringify({ ip, message: `New User Join: ${ip} - ${uid}` }));
-    });
-}
-
-function wsSend(message = '', ip = '', uId = '') {
-    socket.send(JSON.stringify({ ip, message, uId }));
-}
-
-function wsListenMessage() {
-    socket.addEventListener("message", (event) => {
-        console.log("Message from server ", event.data);
-        const { message, ip, uId } = JSON.parse(event.data);
-        displayMessage(message, ip, uId);
-        showNotification(message)
-    });
-}
+// ── Notifications ─────────────────────────────────────────────────────────────
 
 function requestNotification() {
-    if (Notification.permission !== "granted") {
-        Notification.requestPermission().then((permission) => {
-            if (permission === "granted") {
-                console.log("Notification permission granted.");
-            } else {
-                console.log("Notification permission denied.");
-            }
-        });
-    }
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
 }
 
+/**
+ * @param {string} message
+ */
 function showNotification(message) {
-    if (Notification.permission === "granted") {
-        new Notification("New Message", {
-            body: message,
-        });
-    } else if (Notification.permission === "default") {
-        Notification.requestPermission().then((permission) => {
-            if (permission === "granted") {
-                new Notification("New Message", {
-                    body: message,
-                });
-            } else {
-                console.log("Notification permission denied.");
-            }
-        });
-    } else {
-        console.log("Notification permission denied.");
-    }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    new Notification('New Message', { body: message });
+  } catch {
+    // Notification API can throw in some browsers — ignore silently
+  }
 }
 
-function generateUUID() {
-    uId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        var r = Math.random() * 16 | 0,
-            v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
+// ── Utilities ──────────────────────────────────────────────────────────────────
+
+/** Fetch the public IP (best effort). */
+async function getIp() {
+  try {
+    const response = await fetch('https://api.ipify.org?format=json');
+    const data = await response.json();
+    return data.ip;
+  } catch (err) {
+    console.warn('Could not determine public IP:', err);
+    return null;
+  }
 }
+
+/** Generate a UUID, preferring the native crypto API. */
+function generateUUID() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+// ── Theme ──────────────────────────────────────────────────────────────────────
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('chat-theme', theme);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') ?? 'light';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+// Restore saved or system-preferred theme on load
+(function initTheme() {
+  const saved = localStorage.getItem('chat-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved ?? (prefersDark ? 'dark' : 'light'));
+})();
