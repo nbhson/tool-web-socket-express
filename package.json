@@ -17,8 +17,8 @@
     "express",
     "realtime"
   ],
-  "author": "",
-  "license": "ISC",
+  "author": "Son Nguyen (https://github.com/nbhson)",
+  "license": "MIT",
   "dependencies": {
     "express": "^5.0.0",
     "ws": "^8.0.0"
