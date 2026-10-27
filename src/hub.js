@@ -1,6 +1,8 @@
 /**
- * Shared WebSocket chat hub with broadcast, heartbeat, and JSON handling.
- * Used by the server entry point; designed for unit-testing with a real WS server.
+ * Shared WebSocket chat hub with broadcast, heartbeat, JSON handling,
+ * payload size limits, and message validation.
+ *
+ * @module hub
  */
 
 'use strict';
@@ -11,10 +13,25 @@ const { WebSocketServer } = require('ws');
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 /**
+ * Default maximum WebSocket frame payload size (bytes).
+ * Frames larger than this are rejected by the server (close code 1009).
+ * @type {number}
+ */
+const DEFAULT_MAX_PAYLOAD_BYTES = 16 * 1024; // 16 KB
+
+/**
+ * Maximum broadcast message string length.
+ * Prevents clients from publishing extremely large chat messages.
+ * @type {number}
+ */
+const MAX_MESSAGE_LENGTH = 4 * 1024; // 4 KB
+
+/**
  * @typedef {Object} HubOptions
  * @property {import('http').Server} server - HTTP server to attach WS to
  * @property {string} [path='/ws'] - WebSocket upgrade path
  * @property {number} [heartbeatIntervalMs] - Heartbeat ping interval
+ * @property {number} [maxPayloadBytes] - Max WebSocket frame size in bytes
  */
 
 /**
@@ -23,23 +40,41 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
  * @param {HubOptions} options
  * @returns {{ wss: WebSocketServer, broadcast: (data: object) => void, close: () => void }}
  */
-function createChatHub({ server, path = '/ws', heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS } = {}) {
-  const wss = new WebSocketServer({ server, path });
+function createChatHub({
+  server,
+  path = '/ws',
+  heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
+  maxPayloadBytes = DEFAULT_MAX_PAYLOAD_BYTES,
+} = {}) {
+  /** @type {WebSocketServer} */
+  const wss = new WebSocketServer({
+    server,
+    path,
+    // maxPayload enforces the WebSocket frame size limit at protocol level.
+    // Frames exceeding this limit cause the server to close the connection
+    // with code 1009 (Message Too Big).
+    maxPayload: maxPayloadBytes,
+  });
+
   /** @type {Set<import('ws').WebSocket>} */
   const clients = new Set();
 
-  wss.on('connection', (socket, request) => {
-    // Mark alive and add to pool
+  wss.on('connection', (socket, _request) => {
+    // Initialise alive flag and register client.
     socket.isAlive = true;
     clients.add(socket);
     console.log(`[WS] Client connected (total: ${clients.size})`);
 
-    // Heartbeat pong
-    socket.on('pong', () => { socket.isAlive = true; });
+    // Heartbeat pong: mark client alive when it responds.
+    socket.on('pong', () => {
+      socket.isAlive = true;
+    });
 
     socket.on('message', (raw) => {
-      /** @type {string} */
+      /** @type {string} Raw frame payload as string */
       const rawStr = raw.toString();
+
+      /** @type {object|undefined} Parsed JSON payload */
       let payload;
       try {
         payload = JSON.parse(rawStr);
@@ -47,7 +82,31 @@ function createChatHub({ server, path = '/ws', heartbeatIntervalMs = DEFAULT_HEA
         socket.send(JSON.stringify({ error: 'Invalid JSON format' }));
         return;
       }
-      broadcast({ ip: payload.ip, uId: payload.uId, message: payload.message });
+
+      // Guard: reject non-object payloads.
+      if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+        socket.send(JSON.stringify({ error: 'Payload must be a JSON object' }));
+        return;
+      }
+
+      const { ip, uId, message } = payload;
+
+      // Guard: validate message field — must be a non-empty string
+      // within MAX_MESSAGE_LENGTH. Broadcast only valid chat messages.
+      if (
+        typeof message !== 'string' ||
+        message.trim().length === 0 ||
+        message.length > MAX_MESSAGE_LENGTH
+      ) {
+        socket.send(
+          JSON.stringify({
+            error: `Message must be a non-empty string ≤ ${MAX_MESSAGE_LENGTH} characters.`,
+          })
+        );
+        return;
+      }
+
+      broadcast({ ip, uId, message: message.trim() });
     });
 
     socket.on('close', () => {
@@ -57,7 +116,7 @@ function createChatHub({ server, path = '/ws', heartbeatIntervalMs = DEFAULT_HEA
 
     socket.on('error', (err) => {
       console.error(`[WS] Client socket error: ${err.message}`);
-      clients.delete(socket);
+      // ws guarantee: 'close' fires after 'error', so clients.delete in close handler.
     });
   });
 
@@ -82,7 +141,9 @@ function createChatHub({ server, path = '/ws', heartbeatIntervalMs = DEFAULT_HEA
   const heartbeat = setInterval(() => {
     for (const client of clients) {
       if (client.isAlive === false) {
-        console.log(`[WS] Terminating unresponsive client (total: ${clients.size - 1})`);
+        console.log(
+          `[WS] Terminating unresponsive client (total: ${clients.size - 1})`
+        );
         client.terminate();
         continue;
       }
@@ -106,4 +167,4 @@ function createChatHub({ server, path = '/ws', heartbeatIntervalMs = DEFAULT_HEA
   return { wss, broadcast, close };
 }
 
-module.exports = { createChatHub, DEFAULT_HEARTBEAT_INTERVAL_MS };
+module.exports = { createChatHub, DEFAULT_HEARTBEAT_INTERVAL_MS, MAX_MESSAGE_LENGTH };
