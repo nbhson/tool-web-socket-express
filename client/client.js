@@ -23,8 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chatBox = document.getElementById('chat-box');
   uId = generateUUID();
   myIp = await getIp() ?? 'unknown';
-  bindSendEvents();
-  bindThemeToggle();
+  bindSendEvents(); // also binds the theme-toggle button
   connect();
   requestNotification();
 });
