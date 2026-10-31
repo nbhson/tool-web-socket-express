@@ -48,7 +48,34 @@ WebSocket + Express server (`server.js`, `src/`), node --test, có UI client.
 
 ### P2 (hardening)
 - [ ] CI workflow
-- [ ] README sync
+- [x] README sync
+
+## P2 (31-10-2026) — Nâng cấp toàn diện
+### Fixed
+- **[Bug client]** `bindThemeToggle()` được gọi nhưng không tồn tại → ReferenceError
+  trong DOMContentLoaded khiến `connect()` không bao giờ chạy (WS client không kết nối
+  được). ESLint phát hiện qua `no-undef`. Việc bind theme-toggle đã nằm sẵn trong
+  `bindSendEvents()` — xoá lời gọi lỗi.
+
+### Added
+- **[Security]** WS rate limiting mỗi kết nối: 30 tin nhắn / 10 giây (fixed window),
+  vượt giới hạn nhận `{ error: "Rate limit exceeded..." }`, không broadcast.
+  Tuỳ chọn `rateLimitMax` (0 = tắt), `rateLimitWindowMs`.
+- **[Security]** Origin allowlist cho WS upgrade qua `verifyClient`:
+  `allowedOrigins` (mặc định `'*'` = không kiểm tra, non-browser luôn được phép).
+  Origin ngoài allowlist bị từ chối ở bước handshake.
+- **[Tooling]** ESLint 9 flat config (`eslint.config.js`), scripts `lint` + `smoke`,
+  devDeps: eslint, @eslint/js, globals.
+- **[Tests]** `test/security.test.js` — 7 test mới: rate limit (từ chối, reset window,
+  tắt được) + origin check (default `*`, reject, allow, non-browser). 24/24 pass.
+
+### Dependencies
+- `ws` ^8.0.0 → ^8.22.1 (minor, an toàn)
+- eslint/@eslint/js/globals: dev-only. `npm audit --omit=dev` → 0 vulnerabilities;
+  5 moderate tồn tại trong chuỗi dev của ESLint 9 (minimatch qua @eslint/*),
+  không ảnh hưởng runtime.
+
+### Final test count: **24/24** ✅ (was 17), ESLint: 0 error/warning
 
 ## Self-review log
 - _0:44_ Audit lần 1: 11/11 pass.

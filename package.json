@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "lint": "eslint .",
+    "smoke": "node test/smoke.js"
   },
   "engines": {
     "node": ">=18"
@@ -21,6 +23,11 @@
   "license": "MIT",
   "dependencies": {
     "express": "^5.0.0",
-    "ws": "^8.0.0"
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0"
   }
 }
