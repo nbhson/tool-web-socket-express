@@ -20,6 +20,21 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_PAYLOAD_BYTES = 16 * 1024; // 16 KB
 
 /**
+ * Default per-connection message rate limit.
+ * A client may send at most this many messages per rate-limit window;
+ * excess messages receive an error JSON and are not broadcast.
+ * Set `rateLimitMax` to 0 to disable.
+ * @type {number}
+ */
+const DEFAULT_RATE_LIMIT_MAX = 30;
+
+/**
+ * Default rate-limit window in milliseconds.
+ * @type {number}
+ */
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 10_000;
+
+/**
  * Maximum broadcast message string length.
  * Prevents clients from publishing extremely large chat messages.
  * @type {number}
@@ -32,7 +47,29 @@ const MAX_MESSAGE_LENGTH = 4 * 1024; // 4 KB
  * @property {string} [path='/ws'] - WebSocket upgrade path
  * @property {number} [heartbeatIntervalMs] - Heartbeat ping interval
  * @property {number} [maxPayloadBytes] - Max WebSocket frame size in bytes
+ * @property {number} [rateLimitMax=30] - Max messages per connection per
+ *   window; 0 disables rate limiting
+ * @property {number} [rateLimitWindowMs=10000] - Rate-limit window length (ms)
+ * @property {string[]|'*'} [allowedOrigins='*'] - Browser origins allowed to
+ *   connect. '*' disables the check (non-browser clients send no Origin and
+ *   are always allowed). Same-origin deployments can pass e.g.
+ *   ['http://localhost:3000'].
  */
+
+/**
+ * Check the Origin header of an upgrade request against an allowlist.
+ *
+ * @param {import('http').IncomingMessage} request
+ * @param {string[]|'*'|undefined} allowedOrigins
+ * @returns {boolean} true when the request is allowed
+ */
+function isOriginAllowed(request, allowedOrigins) {
+  if (!allowedOrigins || allowedOrigins === '*') return true;
+  const origin = request.headers.origin;
+  // Non-browser clients (curl, tests, native apps) send no Origin — allow them.
+  if (!origin) return true;
+  return Array.isArray(allowedOrigins) && allowedOrigins.includes(origin);
+}
 
 /**
  * Create a chat hub attached to an HTTP server.
@@ -45,6 +82,9 @@ function createChatHub({
   path = '/ws',
   heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
   maxPayloadBytes = DEFAULT_MAX_PAYLOAD_BYTES,
+  rateLimitMax = DEFAULT_RATE_LIMIT_MAX,
+  rateLimitWindowMs = DEFAULT_RATE_LIMIT_WINDOW_MS,
+  allowedOrigins = '*',
 } = {}) {
   /** @type {WebSocketServer} */
   const wss = new WebSocketServer({
@@ -54,6 +94,9 @@ function createChatHub({
     // Frames exceeding this limit cause the server to close the connection
     // with code 1009 (Message Too Big).
     maxPayload: maxPayloadBytes,
+    // Origin allowlist: reject cross-origin browser upgrades with 403.
+    verifyClient: (info) =>
+      isOriginAllowed(info.req, allowedOrigins) ? true : false,
   });
 
   /** @type {Set<import('ws').WebSocket>} */
@@ -65,12 +108,40 @@ function createChatHub({
     clients.add(socket);
     console.log(`[WS] Client connected (total: ${clients.size})`);
 
+    // Per-connection rate limiting: fixed-window counter.
+    // Excess messages are rejected with an error JSON, never broadcast.
+    let rateCount = 0;
+    let rateWindowStart = Date.now();
+    /**
+     * @returns {boolean} true when the message is within the rate limit
+     */
+    function isWithinRateLimit() {
+      if (rateLimitMax <= 0) return true;
+      const now = Date.now();
+      if (now - rateWindowStart >= rateLimitWindowMs) {
+        rateWindowStart = now;
+        rateCount = 0;
+      }
+      rateCount += 1;
+      return rateCount <= rateLimitMax;
+    }
+
     // Heartbeat pong: mark client alive when it responds.
     socket.on('pong', () => {
       socket.isAlive = true;
     });
 
     socket.on('message', (raw) => {
+      // Rate limit first: cheap check, protects JSON parsing as well.
+      if (!isWithinRateLimit()) {
+        socket.send(
+          JSON.stringify({
+            error: 'Rate limit exceeded. Slow down and retry later.',
+          })
+        );
+        return;
+      }
+
       /** @type {string} Raw frame payload as string */
       const rawStr = raw.toString();
 
@@ -167,4 +238,11 @@ function createChatHub({
   return { wss, broadcast, close };
 }
 
-module.exports = { createChatHub, DEFAULT_HEARTBEAT_INTERVAL_MS, MAX_MESSAGE_LENGTH };
+module.exports = {
+  createChatHub,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  MAX_MESSAGE_LENGTH,
+  DEFAULT_MAX_PAYLOAD_BYTES,
+  DEFAULT_RATE_LIMIT_MAX,
+  DEFAULT_RATE_LIMIT_WINDOW_MS,
+};
