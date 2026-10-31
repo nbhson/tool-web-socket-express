@@ -66,7 +66,7 @@ describe('createChatHub', () => {
   }
 
   test('attaches a WebSocket server to the HTTP server', async () => {
-    const hub = createAutoHub({ path: '/ws-a' });
+    createAutoHub({ path: '/ws-a' });
     const url = `ws://127.0.0.1:${ctx.port}/ws-a`;
     const ws = new WebSocket(url);
     await waitForOpen(ws);
@@ -101,7 +101,7 @@ describe('createChatHub', () => {
   });
 
   test('returns error JSON when client sends malformed JSON', async () => {
-    const hub = createAutoHub({ path: '/ws-c' });
+    createAutoHub({ path: '/ws-c' });
     const url = `ws://127.0.0.1:${ctx.port}/ws-c`;
 
     const ws = new WebSocket(url);

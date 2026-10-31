@@ -10,13 +10,10 @@
 const { test, describe, beforeEach, afterEach, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('node:http');
-const path = require('node:path');
 const { WebSocket } = require('ws');
 
 const { createChatHub } = require('../src/hub.js');
 const { createApp } = require('../src/app.js');
-
-const CLIENT_DIR = require('path').join(__dirname, '..', 'client');
 
 /** Resolve once the WebSocket is open. */
 const waitForOpen = (ws) =>
@@ -61,7 +58,7 @@ describe('hub hardening', () => {
   }
 
   test('closes connection when a WS frame exceeds maxPayload (1009)', async () => {
-    const hub = createAutoHub({ path: '/ws-big', maxPayloadBytes: 1024 });
+    createAutoHub({ path: '/ws-big', maxPayloadBytes: 1024 });
     const url = `ws://127.0.0.1:${ctx.port}/ws-big`;
 
     const ws = new WebSocket(url);
@@ -76,7 +73,7 @@ describe('hub hardening', () => {
   });
 
   test('rejects messages that are not non-empty strings', async () => {
-    const hub = createAutoHub({ path: '/ws-val' });
+    createAutoHub({ path: '/ws-val' });
     const url = `ws://127.0.0.1:${ctx.port}/ws-val`;
 
     const ws = new WebSocket(url);
@@ -100,7 +97,7 @@ describe('hub hardening', () => {
   });
 
   test('rejects messages exceeding MAX_MESSAGE_LENGTH', async () => {
-    const hub = createAutoHub({ path: '/ws-len' });
+    createAutoHub({ path: '/ws-len' });
     const url = `ws://127.0.0.1:${ctx.port}/ws-len`;
 
     const ws = new WebSocket(url);
