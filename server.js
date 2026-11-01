@@ -11,6 +11,7 @@
  *   PORT=3000        - HTTP/WS port (default: 3000)
  *   HOST=0.0.0.0    - bind address  (default: 0.0.0.0)
  *   WS_PATH=/ws      - WebSocket path (default: /ws)
+ *   WS_ALLOWED_ORIGINS=a,b - browser Origin allowlist ('*' = no check)
  */
 
 'use strict';
@@ -25,13 +26,32 @@ const { createApp } = require('./src/app');
 const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const WS_PATH = process.env.WS_PATH ?? '/ws';
+/**
+ * Origin allowlist for browser WS clients, comma-separated.
+ * Unset/'*' disables the check (non-browser clients are always allowed).
+ * @type {'*'|string[]}
+ */
+const WS_ALLOWED_ORIGINS = (() => {
+  const raw = process.env.WS_ALLOWED_ORIGINS?.trim();
+  if (!raw || raw === '*') return '*';
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+})();
 const CLIENT_DIR = path.join(__dirname, 'client');
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
-const app = createApp({ staticDir: CLIENT_DIR });
+/** Live hub reference for /health stats (assigned right after bootstrap). */
+let hub = null;
+const app = createApp({
+  staticDir: CLIENT_DIR,
+  getStats: () => ({ wsClients: hub?.clientCount ?? 0 }),
+});
 const server = http.createServer(app);
 
-const hub = createChatHub({ server, path: WS_PATH });
+hub = createChatHub({
+  server,
+  path: WS_PATH,
+  allowedOrigins: WS_ALLOWED_ORIGINS,
+});
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 server.listen(PORT, HOST, () => {

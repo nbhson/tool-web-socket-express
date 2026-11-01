@@ -11,10 +11,12 @@ const isProd = process.env.NODE_ENV === 'production';
 /**
  * Create and configure the Express app.
  *
- * @param {{ staticDir: string }} options
+ * @param {{ staticDir: string, getStats?: () => object }} options
+ *   getStats (optional) supplies live stats for GET /health, e.g. the number
+ *   of connected WS clients; called on every /health request.
  * @returns {import('express').Express}
  */
-function createApp({ staticDir }) {
+function createApp({ staticDir, getStats } = {}) {
   const app = express();
 
   // Security: hide Express signature
@@ -40,6 +42,21 @@ function createApp({ staticDir }) {
     res.json({ status: 'ok', uptime: Math.floor(process.uptime()) });
   });
 
+  // Detailed health check: uptime, live WS client count, memory usage.
+  app.get('/health', (_req, res) => {
+    const stats = typeof getStats === 'function' ? getStats() : {};
+    const memory = process.memoryUsage();
+    res.json({
+      status: 'ok',
+      uptime: Math.floor(process.uptime()),
+      wsClients: stats.wsClients ?? null,
+      memory: {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+      },
+    });
+  });
+
   // Static client files.
   // Path traversal safety: express.static normalises '..' segments and refuses
   // to serve files resolving outside staticDir; the SPA fallback below only
@@ -55,7 +72,7 @@ function createApp({ staticDir }) {
   }));
 
   // SPA fallback: serve index.html for non-API routes
-  app.get(/^\/(?!healthz|ws).*/, (_req, res) => {
+  app.get(/^\/(?!healthz|health|ws).*/, (_req, res) => {
     res.sendFile(require('path').join(staticDir, 'index.html'));
   });
 

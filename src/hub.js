@@ -134,6 +134,15 @@ function createChatHub({
   }
   paths.add(path);
 
+  // Keep default '*' for backwards compatibility, but warn when it would
+  // leave the hub open to every website in production.
+  if (allowedOrigins === '*' && process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[WS] WARNING: allowedOrigins is "*" in production — any website can open a WebSocket to this server. ' +
+        'Set WS_ALLOWED_ORIGINS (comma-separated) or pass allowedOrigins to createChatHub().'
+    );
+  }
+
   /** Whether hub.close() has run — further upgrades are refused. */
   let closed = false;
 
@@ -231,6 +240,12 @@ function createChatHub({
       // Guard: reject non-object payloads.
       if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
         socket.send(JSON.stringify({ error: 'Payload must be a JSON object' }));
+        return;
+      }
+
+      // Application-level ping: reply with pong, never broadcast.
+      if (payload.type === 'ping') {
+        socket.send(JSON.stringify({ type: 'pong' }));
         return;
       }
 
