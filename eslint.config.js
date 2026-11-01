@@ -35,4 +35,19 @@ module.exports = [
       globals: { ...globals.browser, ...globals.es2022 },
     },
   },
+  {
+    // Reconnect is defined in client/reconnect.js (loaded before client.js).
+    files: ['client/client.js'],
+    languageOptions: {
+      globals: { Reconnect: 'readonly' },
+    },
+  },
+  {
+    // client/reconnect.js is a dual-environment module: a classic browser
+    // script and a CommonJS module for Node tests — needs the `module` global.
+    files: ['client/reconnect.js'],
+    languageOptions: {
+      globals: { module: 'writable' },
+    },
+  },
 ];

@@ -14,8 +14,7 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 let myIp = '';
 
-const MAX_RECONNECT_DELAY = 10_000;
-const BASE_RECONNECT_DELAY = 1_000;
+let bannerTimer = null;
 
 // ── Boot ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -45,12 +44,14 @@ function connect() {
   socket.addEventListener('open', () => {
     reconnectAttempts = 0;
     setStatus('connected');
+    hideBanner();
     wsSend({ ip: myIp, message: `New User Join: ${myIp} - ${uId}` });
   });
 
   socket.addEventListener('message', (event) => {
     try {
       const data = JSON.parse(event.data);
+      if (data.type === 'pong') return; // heartbeat reply — nothing to show
       if (data.error) { showError(data.error); return; }
       displayMessage(data.message ?? '', data.ip ?? '', data.uId ?? '');
       showNotification(data.message ?? '');
@@ -70,11 +71,12 @@ function connect() {
   });
 }
 
-/** Reconnect with exponential backoff (capped). */
+/** Reconnect with exponential backoff (capped) and a countdown banner. */
 function scheduleReconnect() {
   if (reconnectTimer) return;
-  const delay = Math.min(BASE_RECONNECT_DELAY * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY);
+  const delay = Reconnect.nextReconnectDelay(reconnectAttempts);
   reconnectAttempts += 1;
+  showError(`Connection lost — reconnecting in ${Math.round(delay / 1000)}s…`, 0);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
@@ -109,15 +111,28 @@ function setStatus(state) {
 }
 
 /**
- * Show a transient error banner.
+ * Show a banner. Rate-limit and validation errors auto-hide after 4s;
+ * pass durationMs = 0 to keep the banner until hideBanner() is called.
  * @param {string} text
+ * @param {number} [durationMs] - auto-hide delay; 0 keeps it visible
  */
-function showError(text) {
+function showError(text, durationMs = 4000) {
   const banner = document.getElementById('error-banner');
   if (!banner) return;
   banner.textContent = text;
   banner.classList.add('visible');
-  setTimeout(() => banner.classList.remove('visible'), 4000);
+  clearTimeout(bannerTimer);
+  if (durationMs > 0) {
+    bannerTimer = setTimeout(() => banner.classList.remove('visible'), durationMs);
+  }
+}
+
+/** Hide the banner (e.g. once the socket reconnects). */
+function hideBanner() {
+  clearTimeout(bannerTimer);
+  bannerTimer = null;
+  const banner = document.getElementById('error-banner');
+  if (banner) banner.classList.remove('visible');
 }
 
 /**
