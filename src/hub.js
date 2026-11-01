@@ -7,7 +7,7 @@
 
 'use strict';
 
-const { WebSocketServer } = require('ws');
+const { WebSocket, WebSocketServer } = require('ws');
 
 /**
  * Registry of WS paths already claimed by a hub, keyed by HTTP server.
@@ -33,6 +33,13 @@ function upgradePathname(request) {
 
 /** Default heartbeat interval: 30 seconds */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Default grace period (ms) for clients to finish the close handshake
+ * during shutdown before they are force-terminated.
+ * @type {number}
+ */
+const DEFAULT_CLOSE_GRACE_MS = 1_000;
 
 /**
  * Default maximum WebSocket frame payload size (bytes).
@@ -291,23 +298,65 @@ function createChatHub({
   }, heartbeatIntervalMs);
   if (heartbeat.unref) heartbeat.unref();
 
-  /** Close the hub cleanly. */
-  function close() {
+  /**
+   * Close the hub cleanly:
+   *   1. stop the heartbeat,
+   *   2. send a WebSocket close frame (1001 Going Away) to every client so
+   *      they can reconnect elsewhere instead of seeing an aborted socket,
+   *   3. force-terminate clients that ignore the close frame after a grace
+   *      period,
+   *   4. wait for the WebSocketServer to finish closing.
+   *
+   * @param {{ code?: number, reason?: string, graceMs?: number }} [options]
+   * @returns {Promise<void>} resolves once the WS server is fully closed
+   */
+  function close({
+    code = 1001,
+    reason = 'Server going away',
+    graceMs = DEFAULT_CLOSE_GRACE_MS,
+  } = {}) {
+    if (closed) return Promise.resolve();
+    closed = true;
     clearInterval(heartbeat);
+
     for (const client of clients) {
-      client.terminate();
+      if (client.readyState === WebSocket.OPEN) {
+        client.close(code, reason);
+      }
     }
-    wss.close(() => {
-      console.log('[WS] Hub closed');
+
+    // Safety net: force-terminate clients that never finish the handshake.
+    const force = setTimeout(() => {
+      for (const client of clients) {
+        if (client.readyState !== WebSocket.CLOSED) client.terminate();
+      }
+    }, graceMs);
+    if (force.unref) force.unref();
+
+    // With noServer, wss.close() resolves after every client disconnects.
+    return new Promise((resolve) => {
+      wss.close(() => {
+        console.log('[WS] Hub closed');
+        resolve();
+      });
     });
   }
 
-  return { wss, broadcast, close };
+  return {
+    wss,
+    broadcast,
+    close,
+    /** Number of currently connected WS clients. */
+    get clientCount() {
+      return clients.size;
+    },
+  };
 }
 
 module.exports = {
   createChatHub,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_CLOSE_GRACE_MS,
   MAX_MESSAGE_LENGTH,
   DEFAULT_MAX_PAYLOAD_BYTES,
   DEFAULT_RATE_LIMIT_MAX,

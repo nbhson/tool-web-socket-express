@@ -3,7 +3,8 @@
  *
  * Single HTTP server on PORT:
  *   - GET /          → static chat UI (served by Express)
- *   - GET /healthz  → health check
+ *   - GET /healthz  → health check (lightweight)
+ *   - GET /health   → health details (uptime, WS clients, memory)
  *   - WS  /ws       → realtime chat hub
  *
  * Environment variables:
@@ -40,21 +41,40 @@ server.listen(PORT, HOST, () => {
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+let shuttingDown = false;
+
 /**
+ * Graceful shutdown on SIGTERM/SIGINT:
+ *   1. stop accepting new work and close every WS connection with close
+ *      code 1001 (Going Away) so clients can reconnect elsewhere,
+ *   2. close the HTTP server (waits for in-flight requests),
+ *   3. exit cleanly with code 0.
+ * A hard timeout guards against hung connections.
+ *
  * @param {string} signal
  */
-function shutdown(signal) {
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`\n[Server] ${signal} received, shutting down gracefully...`);
-  hub.close();
-  server.close(() => {
-    console.log('[Server] Closed');
-    process.exit(0);
-  });
-  // Force exit after 5s
-  setTimeout(() => {
+
+  const forceExit = setTimeout(() => {
     console.error('[Server] Forced exit after timeout');
     process.exit(1);
-  }, 5000).unref();
+  }, SHUTDOWN_TIMEOUT_MS);
+  if (forceExit.unref) forceExit.unref();
+
+  try {
+    await hub.close(); // WS clients receive close frame 1001
+    server.closeIdleConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    console.log('[Server] Closed');
+    process.exit(0);
+  } catch (err) {
+    console.error('[Server] Shutdown error:', err?.message ?? err);
+    process.exit(1);
+  }
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
