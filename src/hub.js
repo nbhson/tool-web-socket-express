@@ -9,6 +9,28 @@
 
 const { WebSocketServer } = require('ws');
 
+/**
+ * Registry of WS paths already claimed by a hub, keyed by HTTP server.
+ * Lets multiple hubs share one HTTP server and lets each upgrade listener
+ * decide whether a path is handled by another hub or truly unknown.
+ * @type {WeakMap<import('http').Server, Set<string>>}
+ */
+const claimedPaths = new WeakMap();
+
+/**
+ * Extract the pathname of an upgrade request URL.
+ * @param {import('http').IncomingMessage} request
+ * @returns {string}
+ */
+function upgradePathname(request) {
+  const url = request.url ?? '/';
+  try {
+    return new URL(url, 'http://localhost').pathname;
+  } catch {
+    return url;
+  }
+}
+
 /** Default heartbeat interval: 30 seconds */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -53,7 +75,8 @@ const MAX_MESSAGE_LENGTH = 4 * 1024; // 4 KB
  * @property {string[]|'*'} [allowedOrigins='*'] - Browser origins allowed to
  *   connect. '*' disables the check (non-browser clients send no Origin and
  *   are always allowed). Same-origin deployments can pass e.g.
- *   ['http://localhost:3000'].
+ *   ['http://localhost:3000']. Origin checks run in a `server.on('upgrade')`
+ *   listener (not the legacy `verifyClient`), rejecting bad origins with 403.
  */
 
 /**
@@ -88,15 +111,59 @@ function createChatHub({
 } = {}) {
   /** @type {WebSocketServer} */
   const wss = new WebSocketServer({
-    server,
-    path,
+    noServer: true,
     // maxPayload enforces the WebSocket frame size limit at protocol level.
     // Frames exceeding this limit cause the server to close the connection
     // with code 1009 (Message Too Big).
     maxPayload: maxPayloadBytes,
-    // Origin allowlist: reject cross-origin browser upgrades with 403.
-    verifyClient: (info) =>
-      isOriginAllowed(info.req, allowedOrigins) ? true : false,
+  });
+
+  // Register this hub's path so co-located hubs on the same HTTP server do
+  // not destroy each other's upgrades (see the shared listener below).
+  let paths = claimedPaths.get(server);
+  if (!paths) {
+    paths = new Set();
+    claimedPaths.set(server, paths);
+  }
+  paths.add(path);
+
+  /** Whether hub.close() has run — further upgrades are refused. */
+  let closed = false;
+
+  // Origin allowlist + path routing in an 'upgrade' listener (replaces the
+  // legacy `verifyClient` option, which ws deprecated in favour of this).
+  server.on('upgrade', (request, socket, head) => {
+    const pathname = upgradePathname(request);
+
+    // Unknown WS path: no hub on this server claims it — reject with 404.
+    if (!paths.has(pathname)) {
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Another hub on this server owns this path — leave it to that listener.
+    if (pathname !== path) return;
+
+    // Hub already shut down — refuse with 503.
+    if (closed) {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Browser origins outside the allowlist are rejected with 403.
+    // Non-browser clients (no Origin header) are always allowed.
+    if (!isOriginAllowed(request, allowedOrigins)) {
+      console.warn(`[WS] Rejected upgrade: origin not allowed (${request.headers.origin ?? 'no Origin'})`);
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
   });
 
   /** @type {Set<import('ws').WebSocket>} */
